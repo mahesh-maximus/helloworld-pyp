@@ -1,0 +1,414 @@
+# Development container image (without tag)
+DEVCTR_IMAGE_NO_TAG="public.mahesh/mahesh-maximus/pyfinity"
+
+# Development container tag
+DEVCTR_IMAGE_TAG="v1"
+
+# Development container image (name:tag)
+# This should be updated whenever we upgrade the development container.
+# (Yet another step on our way to reproducible builds.)
+DEVCTR_IMAGE="${DEVCTR_IMAGE_NO_TAG}:${DEVCTR_IMAGE_TAG}"
+
+# Naming things is hard
+MY_NAME="pyfinity $(basename "$0")"
+
+# Full path to the pyfinity tools dir on the host.
+PF_TOOLS_DIR=$(cd "$(dirname "$0")" && pwd)
+
+# Full path to the pyfinity sources dir on the host.
+PF_ROOT_DIR=$(cd "${PF_TOOLS_DIR}/.." && pwd)
+
+# Full path to devctr dir on the host.
+PF_DEVCTR_DIR="${PF_ROOT_DIR}/tools/devctr"
+
+# Full path to the Firecracker sources dir, as bind-mounted in the container.
+CTR_PF_ROOT_DIR="/pyfinity"
+
+# Name of the devctr.
+PF_DEVCTR_NAME="PYFINITY"
+
+# Send a decorated message to stdout, followed by a new line
+#
+say() {
+    [ -t 1 ] && [ -n "$TERM" ] \
+        && echo "$(tput setaf 2)[$MY_NAME]$(tput sgr0) $*" \
+        || echo "[$MY_NAME] $*"
+}
+
+# Send a decorated message to stdout, without a trailing new line
+#
+say_noln() {
+    [ -t 1 ] && [ -n "$TERM" ] \
+        && echo -n "$(tput setaf 2)[$MY_NAME]$(tput sgr0) $*" \
+        || echo "[$MY_NAME] $*"
+}
+
+# Send a text message to stderr
+#
+say_err() {
+    [ -t 2 ] && [ -n "$TERM" ] \
+        && echo -e "$(tput setaf 1)[$MY_NAME] $*$(tput sgr0)" 1>&2 \
+        || echo -e "[$MY_NAME] $*" 1>&2
+}
+
+# Send a warning-highlighted text to stdout
+say_warn() {
+    [ -t 1 ] && [ -n "$TERM" ] \
+        && echo "$(tput setaf 3)[$MY_NAME] $*$(tput sgr0)" \
+        || echo "[$MY_NAME] $*"
+}
+
+# Exit with an error message and (optional) code
+# Usage: die [-c <error code>] <error message>
+#
+die() {
+    code=1
+    [[ "$1" = "-c" ]] && {
+        code="$2"
+        shift 2
+    }
+    say_err "$@"
+    exit $code
+}
+
+# Exit with an error message if the last exit code is not 0
+#
+ok_or_die() {
+    code=$?
+    [[ $code -eq 0 ]] || die -c $code "$@"
+}
+
+# Make sure the build/ dirs are available. Exit if we can't create them.
+# Upon returning from this call, the caller can be certain the build/ dirs exist.
+#
+ensure_build_dir() {
+    for dir in "$FC_BUILD_DIR" "$CARGO_TARGET_DIR" \
+               "$CARGO_REGISTRY_DIR" "$CARGO_GIT_REGISTRY_DIR"; do
+        create_dir "$dir"
+    done
+}
+
+# Run a command and retry multiple times if it fails. Once it stops
+# failing return to normal execution. If there are "retry count"
+# failures, set the last error code.
+# $1 - command
+# $2 - retry count
+# $3 - sleep interval between retries
+#
+retry_cmd() {
+    command=$1
+    retry_cnt=$2
+    sleep_int=$3
+
+    {
+        $command
+    } || {
+        # Command failed, substract one from retry_cnt
+        retry_cnt=$((retry_cnt - 1))
+
+        # If retry_cnt is larger than 0, sleep and call again
+        if [ "$retry_cnt" -gt 0 ]; then
+            echo "$command failed, retrying..."
+            sleep "$sleep_int"
+            retry_cmd "$command" "$retry_cnt" "$sleep_int"
+        fi
+    }
+}
+
+# Check if Docker is available and exit if it's not.
+# Upon returning from this call, the caller can be certain Docker is available.
+#
+ensure_docker() {
+    NEWLINE=$'\n'
+    output=$(which docker 2>&1)
+    ok_or_die "Docker not found. Aborting." \
+        "Please make sure you have Docker (http://docker.com) installed" \
+        "and properly configured.${NEWLINE}" \
+        "Error: $?, command output: ${output}"
+
+    output=$(docker ps 2>&1)
+    ok_or_die "Error accessing Docker. Please make sure the Docker daemon" \
+        "is running and that you are part of the docker group.${NEWLINE}" \
+        "Error: $?, command output: ${output}${NEWLINE}" \
+        "For more information, see" \
+        "https://docs.docker.com/install/linux/linux-postinstall/"
+}
+
+# Attempt to download our Docker image. Exit if that fails.
+# Upon returning from this call, the caller can be certain our Docker image is
+# available on this system.
+#
+ensure_devctr() {
+
+    # We depend on having Docker present.
+    ensure_docker
+
+    # Check if we have the container image available locally. Attempt to
+    # download it, if we don't.
+    [[ $(docker images -q "$DEVCTR_IMAGE" | wc -l) -gt 0 ]] || {
+        say "About to build docker image $DEVCTR_IMAGE"
+        get_user_confirmation || die "Aborted."
+
+        # Run docker pull 5 times in case it fails - sleep 3 seconds
+        # between attempts
+        retry_cmd cmd_build_devctr 5 3
+
+        ok_or_die "Error building docker image. Aborting."
+    }
+}
+
+# Prompt the user for confirmation before proceeding.
+# Args:
+#   $1  prompt text.
+#       Default: Continue? (y/n)
+#   $2  confirmation input.
+#       Default: y
+# Return:
+#   exit code 0 for successful confirmation
+#   exit code != 0 if the user declined
+#
+get_user_confirmation() {
+
+    # Pass if running unattended
+    [[ "$OPT_UNATTENDED" = true ]] && return 0
+
+    # Fail if STDIN is not a terminal (there's no user to confirm anything)
+    [[ -t 0 ]] || return 1
+
+    # Otherwise, ask the user
+    #
+    msg=$([ -n "$1" ] && echo -n "$1" || echo -n "Continue? (y/n) ")
+    yes=$([ -n "$2" ] && echo -n "$2" || echo -n "y")
+    say_noln "$msg"
+    read c && [ "$c" = "$yes" ] && return 0
+    return 1
+}
+
+# Fix build/ dir permissions after a privileged container run.
+# Since the privileged container runs as root, any files it creates will be
+# owned by root. This fixes that by recursively changing the ownership of build/
+# to the current user.
+#
+cmd_fix_perms() {
+    # Yes, running Docker to get elevated privileges, just to chown some files
+    # is a dirty hack.
+    # run_devctr \
+    #     -- \
+    #     chown -R "$(id -u):$(id -g)" "$CTR_FC_BUILD_DIR"
+    say "cmd_fix_perms()"
+}
+
+# Builds the development container from its Dockerfile.
+#
+cmd_build_devctr() {
+    docker_file_name="Dockerfile"
+    build_args="--build-arg TMP_POETRY_DIR=$CTR_POETRY_TMP_DIR"
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            "-h"|"--help")      { cmd_help; exit 1; } ;;
+            "-m"|"--MM")        { say "no help yer!"; exit 1; } ;;
+            "--")               { shift; break;     } ;;
+            *)
+                die "Unknown argument: $1. Please use --help for help."
+            ;;
+        esac
+        shift
+    done
+
+    docker build -t "$DEVCTR_IMAGE" -f "$PF_DEVCTR_DIR/$docker_file_name" .
+}
+
+# Helper function to run the dev container.
+# Usage: run_devctr <docker args> -- <container args>
+# Example: run_devctr --privileged -- bash -c "echo 'hello world'"
+run_devctr() {
+    docker_args=()
+    ctr_args=()
+    docker_args_done=false
+    while [[ $# -gt 0 ]]; do
+        [[ "$1" = "--" ]] && {
+            docker_args_done=true
+            shift
+            continue
+        }
+        [[ $docker_args_done = true ]] && ctr_args+=("$1") || docker_args+=("$1")
+        shift
+    done
+
+    # If we're running in a terminal, pass the terminal to Docker and run
+    # the container interactively
+    [[ -t 0 ]] && docker_args+=("-i")
+    [[ -t 1 ]] && docker_args+=("-t")
+
+    # Finally, run the dev container
+    # Use 'z' on the --volume parameter for docker to automatically relabel the
+    # content and allow sharing between containers.
+    docker run "${docker_args[@]}" \
+        --name "$PF_DEVCTR_NAME" \
+        --rm \
+        -p 3000:3000 \
+        --volume /dev:/dev \
+        --volume "$PF_ROOT_DIR:$CTR_PF_ROOT_DIR:z" \
+        --env OPT_LOCAL_IMAGES_PATH="$(dirname "$CTR_MICROVM_IMAGES_DIR")" \
+        --env PYTHONDONTWRITEBYTECODE=1 \
+        "$DEVCTR_IMAGE" "${ctr_args[@]}"
+}
+
+# `$0 shell` - drop to a shell prompt inside the dev container
+# Please see `$0 help` for more information.
+#
+cmd_shell() {
+
+    # By default, we run the container as the current user.
+    privileged=false
+
+    # Parse any command line args.
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            "-h"|"--help")          { cmd_help; exit 1; } ;;
+            "-p"|"--privileged")    { privileged=true;  } ;;
+              "--")               { shift; break;     } ;;
+            *)
+                die "Unknown argument: $1. Please use --help for help."
+            ;;
+        esac
+        shift
+    done
+
+    # Make sure we have what we need to continue.
+    ensure_devctr
+
+    if [[ $privileged = true ]]; then
+        # If requested, spin up a privileged container.
+        #
+        say "Dropping to a privileged shell prompt ..."
+        say "Note: $FC_ROOT_DIR is bind-mounted under $CTR_PF_ROOT_DIR"
+        say_warn "You are running as root; any files that get created under" \
+            "$CTR_PF_ROOT_DIR will be owned by root."
+
+        run_devctr \
+            --privileged \
+            --ulimit nofile=4096:4096 \
+            --ulimit memlock=-1:-1 \
+            --security-opt seccomp=unconfined \
+            --workdir "$CTR_PF_ROOT_DIR" \
+            -- \
+            bash
+        ret=$?
+
+        # Running as root may have created some root-owned files under the build
+        # dir. Let's fix that.
+        #
+        cmd_fix_perms
+    else
+        say "Dropping to shell prompt as user $(whoami) ..."
+        say "Note: $FC_ROOT_DIR is bind-mounted under $CTR_PF_ROOT_DIR"
+        say_warn "You won't be able to run Firecracker via the jailer," \
+            "but you can still build it."
+        say "You can use \`$0 shell --privileged\` to get a root shell."
+
+        [ -w /dev/kvm ] || \
+            say_warn "WARNING: user $(whoami) doesn't have permission to" \
+                "access /dev/kvm. You won't be able to run Firecracker."
+
+        run_devctr \
+            --user "$(id -u):$(id -g)" \
+            --ulimit nofile=4096:4096 \
+            --ulimit memlock=-1:-1 \
+            --device=/dev/kvm:/dev/kvm \
+            --workdir "$CTR_PF_ROOT_DIR" \
+            --env PS1="$(whoami)@\h:\w\$ " \
+            -- \
+            bash --norc
+        ret=$?
+    fi
+
+    return $ret
+}
+
+# `$0 build` - build Firecracker
+# Please see `$0 help` for more information.
+#
+cmd_build() {
+    # By default, we'll build the debug binaries.
+    profile="debug"
+
+    # Check prerequisites
+    ensure_devctr
+
+    say "Build ($profile) ..."
+}
+
+# Stats serving Python interpreter
+#
+cmd_serve() {
+    say "cmd_serve"
+    run_devctr \
+        --user "$(id -u):$(id -g)" \
+        --workdir "$CTR_PF_ROOT_DIR" \
+        -- \
+        python3 "infinity.py"
+
+    ret=$? 
+
+    return $ret   
+}
+
+cmd_remove_node_modules() {
+    say_warn 'Requires elevated privileges to remove all Node Modules!'
+    say "Are you sure you want delete all the node modules in: $PF_ROOT_DIR/felix"
+    get_user_confirmation || die "Aborted."
+
+    cd "$PF_ROOT_DIR/felix"
+    sudo find -name "node_modules" -exec rm -rf {} +
+}
+
+cmd_exec_shell() {
+    docker exec -it "$PF_DEVCTR_NAME"  bash
+}
+
+cmd_help() {
+    echo ""
+    echo "pyfinity $(basename $0)"
+    echo "not yet completed"
+    echo ""
+}
+
+main() {
+
+    if [ $# = 0 ]; then
+        die "No command provided. Please use \`$0 help\` for help."
+    fi
+
+    # Parse main command line args.
+    #
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help)              { cmd_help; exit 1;     } ;;
+            -m|--MM)                { say "--MM"; exit 1;  } ;;
+            -*)
+                die "Unknown arg: $1. Please use \`$0 help\` for help."
+            ;;
+            *)
+                break
+            ;;
+        esac
+        shift
+    done
+
+    # $1 is now a command name. Check if it is a valid command and, if so,
+    # run it.
+    #
+    declare -f "cmd_$1" > /dev/null
+    ok_or_die "Unknown command: $1. Please use \`$0 help\` for help."
+
+    cmd=cmd_$1
+    shift
+
+    # $@ is now a list of command-specific args
+    #
+    $cmd "$@"
+}
+
+main "$@"
