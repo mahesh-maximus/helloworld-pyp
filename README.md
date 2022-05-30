@@ -1,2 +1,2 @@
-# helloworld-pyp
+# Hello World Python Package
 Hello word python package 
