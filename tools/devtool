@@ -1,5 +1,5 @@
 # Development container image (without tag)
-DEVCTR_IMAGE_NO_TAG="public.mahesh/mahesh-maximus/pyfinity"
+DEVCTR_IMAGE_NO_TAG="public.mahesh/mahesh-maximus/hwpyp"
 
 # Development container tag
 DEVCTR_IMAGE_TAG="v1"
@@ -10,22 +10,22 @@ DEVCTR_IMAGE_TAG="v1"
 DEVCTR_IMAGE="${DEVCTR_IMAGE_NO_TAG}:${DEVCTR_IMAGE_TAG}"
 
 # Naming things is hard
-MY_NAME="pyfinity $(basename "$0")"
+MY_NAME="hwpyp $(basename "$0")"
 
-# Full path to the pyfinity tools dir on the host.
+# Full path to the hwpyp tools dir on the host.
 PF_TOOLS_DIR=$(cd "$(dirname "$0")" && pwd)
 
-# Full path to the pyfinity sources dir on the host.
+# Full path to the hwpyp sources dir on the host.
 PF_ROOT_DIR=$(cd "${PF_TOOLS_DIR}/.." && pwd)
 
 # Full path to devctr dir on the host.
 PF_DEVCTR_DIR="${PF_ROOT_DIR}/tools/devctr"
 
 # Full path to the Firecracker sources dir, as bind-mounted in the container.
-CTR_PF_ROOT_DIR="/pyfinity"
+CTR_PF_ROOT_DIR="/hwpyp"
 
 # Name of the devctr.
-PF_DEVCTR_NAME="PYFINITY"
+PF_DEVCTR_NAME="hwpyp"
 
 # Send a decorated message to stdout, followed by a new line
 #
@@ -370,7 +370,7 @@ cmd_exec_shell() {
 
 cmd_help() {
     echo ""
-    echo "pyfinity $(basename $0)"
+    echo "hwpyp $(basename $0)"
     echo "not yet completed"
     echo ""
 }

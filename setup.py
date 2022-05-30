@@ -20,7 +20,12 @@ setuptools.setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    package_dir={"": "src"},
-    packages=setuptools.find_packages(where="src"),
+    package_dir={"": "hwpyp"},
+    packages=setuptools.find_packages(where="hwpyp"),
     python_requires=">=3.6",
+    entry_points={
+                        'console_scripts': [
+                                'hwpypcmd=hwpyp:sayHello',
+                        ]
+                }
 )

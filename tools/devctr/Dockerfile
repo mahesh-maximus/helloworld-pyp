@@ -1,7 +1,7 @@
 # FROM ubuntu:latest
 FROM ubuntu:20.04
 
-ARG PF_SRC_DIR="/pyfinity"
+ARG PF_SRC_DIR="/hwpyp"
 ARG TINI_VERSION_TAG="v0.18.0"
 ARG DEBIAN_FRONTEND=noninteractive
 
