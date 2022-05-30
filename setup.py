@@ -1,14 +1,15 @@
 import setuptools
+from setuptools import setup, find_packages
 
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setuptools.setup(
     name="helloworld-pyp",
-    version="0.0.1",
+    version="0.0.7",
     author="Mahesh Maximus",
     author_email="",
-    description="helloworld pyp",
+    description="My first Python Package",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/mahesh-maximus/helloworld-pyp",
@@ -17,15 +18,14 @@ setuptools.setup(
     },
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License",
-        "Operating System :: OS Independent",
+        "License :: OSI Approved :: MIT License"
     ],
-    package_dir={"": "hwpyp"},
-    packages=setuptools.find_packages(where="hwpyp"),
+    package_dir={'':"src"},
+    packages=find_packages("src"),
     python_requires=">=3.6",
     entry_points={
                         'console_scripts': [
-                                'hwpypcmd=hwpyp:sayHello',
+                                'hwpypcmd=hwpyp.mypy:sayHello',
                         ]
                 }
 )

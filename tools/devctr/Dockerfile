@@ -10,6 +10,7 @@ RUN apt-get update \
         binutils-dev \
         git \
         curl \
+        tar \
         python \
         python3 \
         python3-dev \
@@ -21,6 +22,7 @@ RUN apt-get update \
             wheel \
             build \
             twine \
+            helloworld-pyp \
         && python3 -m pip install --upgrade pip
 
 # Add the tini init binary.
